@@ -43,7 +43,7 @@ var (
 			hclspec.NewLiteral("true"),
 		),
 
-		"wasm_binary_path": hclspec.NewAttr("wasm_binary_path", "string", true),
+		"binary_path": hclspec.NewAttr("binary_path", "string", true),
 	})
 
 	taskConfigSpec = hclspec.NewObject(map[string]*hclspec.Spec{
@@ -172,6 +172,13 @@ func (d *Driver) handleFingerprint(ctx context.Context, ch chan<- *drivers.Finge
 }
 
 func (d *Driver) buildFingerprint() *drivers.Fingerprint {
+	if !d.config.Enabled {
+		return &drivers.Fingerprint{
+			Health:            drivers.HealthStateUndetected,
+			HealthDescription: "disabled",
+		}
+	}
+
 	fp := &drivers.Fingerprint{
 		Attributes:        map[string]*structs.Attribute{},
 		Health:            drivers.HealthStateHealthy,
@@ -189,7 +196,7 @@ func (d *Driver) buildFingerprint() *drivers.Fingerprint {
 		}
 	}
 
-	fp.Attributes["driver.wasm_binary"] = structs.NewStringAttribute(wasmBinary)
+	fp.Attributes["driver.wasm.binary"] = structs.NewStringAttribute(wasmBinary)
 
 	return fp
 }
@@ -259,26 +266,101 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 	return handle, nil, nil
 }
 
-func (w *Driver) WaitTask(ctx context.Context, taskID string) (<-chan *drivers.ExitResult, error) {
-	panic("not implemented") // TODO: Implement
+func (d *Driver) WaitTask(ctx context.Context, taskID string) (<-chan *drivers.ExitResult, error) {
+	handle, ok := d.tasks.Get(taskID)
+	if !ok {
+		return nil, drivers.ErrTaskNotFound
+	}
+
+	ch := make(chan *drivers.ExitResult)
+	go d.handleWait(ctx, handle, ch)
+	return ch, nil
 }
 
-func (w *Driver) StopTask(taskID string, timeout time.Duration, signal string) error {
-	panic("not implemented") // TODO: Implement
+func (d *Driver) handleWait(ctx context.Context, handle *taskHandle, ch chan *drivers.ExitResult) {
+	defer close(ch)
+	var result *drivers.ExitResult
+
+	ps, err := handle.exec.Wait(ctx)
+
+	if err != nil {
+		result = &drivers.ExitResult{
+			Err: fmt.Errorf("executor: error waiting on process: %v", err),
+		}
+	} else {
+		result = &drivers.ExitResult{
+			ExitCode: ps.ExitCode,
+			Signal:   ps.Signal,
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-d.ctx.Done():
+			return
+		case ch <- result:
+		}
+	}
 }
 
-func (w *Driver) DestroyTask(taskID string, force bool) error {
-	panic("not implemented") // TODO: Implement
+func (d *Driver) StopTask(taskID string, timeout time.Duration, signal string) error {
+	handle, ok := d.tasks.Get(taskID)
+	if !ok {
+		return drivers.ErrTaskNotFound
+	}
+
+	if err := handle.exec.Shutdown(signal, timeout); err != nil {
+		if handle.pluginClient.Exited() {
+			return nil
+		}
+		return fmt.Errorf("executor shutdown failed %v", err)
+	}
+
+	return nil
 }
 
-func (w *Driver) InspectTask(taskID string) (*drivers.TaskStatus, error) {
-	panic("not implemented") // TODO: Implement
+func (d *Driver) DestroyTask(taskID string, force bool) error {
+	handle, ok := d.tasks.Get(taskID)
+	if !ok {
+		return drivers.ErrTaskNotFound
+	}
+
+	if handle.IsRunning() && !force {
+		return fmt.Errorf("cannot destroy running task")
+	}
+
+	if !handle.pluginClient.Exited() {
+		if err := handle.exec.Shutdown("", 0); err != nil {
+			handle.logger.Error("destroying executor failed", "err", err)
+		}
+
+		handle.pluginClient.Kill()
+	}
+
+	d.tasks.Delete(taskID)
+	return nil
 }
 
-func (w *Driver) TaskStats(ctx context.Context, taskID string, interval time.Duration) (<-chan *cstructs.TaskResourceUsage, error) {
-	panic("not implemented") // TODO: Implement
+func (d *Driver) InspectTask(taskID string) (*drivers.TaskStatus, error) {
+	handle, ok := d.tasks.Get(taskID)
+	if !ok {
+		return nil, drivers.ErrTaskNotFound
+	}
+
+	return handle.TaskStatus(), nil
 }
 
-func (w *Driver) TaskEvents(_ context.Context) (<-chan *drivers.TaskEvent, error) {
-	panic("not implemented") // TODO: Implement
+func (d *Driver) TaskStats(ctx context.Context, taskID string, interval time.Duration) (<-chan *cstructs.TaskResourceUsage, error) {
+	handle, ok := d.tasks.Get(taskID)
+	if !ok {
+		return nil, drivers.ErrTaskNotFound
+	}
+
+	return handle.exec.Stats(ctx, interval)
+}
+
+func (d *Driver) TaskEvents(ctx context.Context) (<-chan *drivers.TaskEvent, error) {
+	return d.eventer.TaskEvents(ctx)
 }
