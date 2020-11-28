@@ -1,4 +1,4 @@
-module github.com/protochron/nomad-wasm-driver
+module github.com/protochron/nomad-driver-wasm
 
 go 1.15
 

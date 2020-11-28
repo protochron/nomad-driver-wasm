@@ -48,6 +48,7 @@ var (
 
 	taskConfigSpec = hclspec.NewObject(map[string]*hclspec.Spec{
 		"path": hclspec.NewAttr("path", "string", true),
+		"args": hclspec.NewAttr("args", "list(string)", false),
 	})
 
 	capabilities = &drivers.Capabilities{}

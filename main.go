@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/protochron/nomad-wasm-driver/wasm"
+	"github.com/protochron/nomad-driver-wasm/wasm"
 
 	log "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/nomad/plugins"
