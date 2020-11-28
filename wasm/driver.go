@@ -35,6 +35,7 @@ var (
 
 	supportedBins = []string{
 		"wasmtime",
+		"wasm3",
 	}
 
 	configSpec = hclspec.NewObject(map[string]*hclspec.Spec{
